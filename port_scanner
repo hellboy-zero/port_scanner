@@ -1,0 +1,163 @@
+#!/bin/python3
+
+import socket
+import threading
+from queue import Queue
+import argparse
+import time
+
+open_ports = []
+queue = Queue()
+
+# ---------- ARGUMENTS ----------
+def get_args():
+    parser = argparse.ArgumentParser(description="Port Scanner + Banner Grabber")
+
+    parser.add_argument("-ip", "--host", required=True,
+                        help="Target IP/Host")
+
+    parser.add_argument("-s", "--start", type=int, default=1,
+                        help="Start Port")
+
+    parser.add_argument("-e", "--end", type=int, default=1024,
+                        help="End Port")
+
+    parser.add_argument("-t", "--threads", type=int, default=200,
+                        help="Number of Threads")
+
+    return parser.parse_args()
+
+
+args = get_args()
+
+host = args.host
+start_port = args.start
+end_port = args.end
+threads = args.threads
+
+start_time = time.time()
+
+# ---------- COMMON SERVICE PORTS ----------
+services = {
+    20: "ftp-data",
+    21: "ftp",
+    22: "ssh",
+    23: "telnet",
+    25: "smtp",
+    53: "dns",
+    80: "http",
+    110: "pop3",
+    111: "rpcbind",
+    135: "msrpc",
+    139: "netbios",
+    143: "imap",
+    443: "https",
+    445: "smb",
+    3306: "mysql",
+    3389: "rdp",
+    5432: "postgresql",
+    5900: "vnc",
+    6379: "redis",
+    8080: "http-proxy"
+}
+
+# ---------- BANNER GRABBING ----------
+def banner_grab(sock, port):
+    try:
+        # Some services send banners automatically
+        banner = sock.recv(1024).decode(errors="ignore").strip()
+
+        if banner:
+            return banner
+
+    except:
+        pass
+
+    # HTTP probe
+    try:
+        if port in [80, 8080, 8000, 443]:
+            http_request = b"HEAD / HTTP/1.0\r\n\r\n"
+
+            sock.send(http_request)
+
+            response = sock.recv(1024).decode(errors="ignore")
+
+            first_line = response.split("\n")[0]
+
+            return first_line.strip()
+
+    except:
+        pass
+
+    return "No Banner"
+
+
+# ---------- PORT SCAN ----------
+def scan_port(port):
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        sock.settimeout(1)
+
+        result = sock.connect_ex((host, port))
+
+        if result == 0:
+
+            service = services.get(port, "unknown")
+
+            banner = banner_grab(sock, port)
+
+            open_ports.append((port, service, banner))
+
+            print(f"[+] Port {port} OPEN | Service: {service}")
+
+        sock.close()
+
+    except:
+        pass
+
+
+# ---------- THREAD WORKER ----------
+def worker():
+    while not queue.empty():
+        port = queue.get()
+        scan_port(port)
+        queue.task_done()
+
+
+# ---------- FILL QUEUE ----------
+for port in range(start_port, end_port + 1):
+    queue.put(port)
+
+
+# ---------- START THREADS ----------
+thread_list = []
+
+for _ in range(threads):
+    thread = threading.Thread(target=worker)
+    thread_list.append(thread)
+    thread.start()
+
+
+for thread in thread_list:
+    thread.join()
+
+
+# ---------- RESULTS ----------
+print("\n" + "=" * 70)
+print("OPEN PORTS AND BANNERS")
+print("=" * 70)
+
+for port, service, banner in sorted(open_ports):
+
+    print(f"""
+Port    : {port}
+Service : {service}
+Banner  : {banner}
+""")
+
+end_time = time.time()
+
+print("=" * 70)
+print(f"Scan Completed in {round(end_time - start_time, 2)} Seconds")
+print("=" * 70)
